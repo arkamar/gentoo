@@ -35,6 +35,7 @@ RDEPEND="${LUA_DEPS}
 	dev-libs/glib:2
 	dev-libs/icu:=
 	dev-libs/libev
+	dev-libs/libfmt:=
 	dev-libs/libsodium
 	dev-libs/snowball-stemmer
 	net-libs/libnsl
