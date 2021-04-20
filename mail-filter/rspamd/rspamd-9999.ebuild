@@ -3,7 +3,7 @@
 
 EAPI=7
 
-LUA_COMPAT=( lua5-{1..3} luajit )
+LUA_COMPAT=( lua5-{1..4} luajit )
 
 inherit cmake lua-single pax-utils systemd tmpfiles
 
@@ -56,7 +56,7 @@ BDEPEND="
 "
 
 PATCHES=(
-	"${FILESDIR}/rspamd-2.7-cmake-lua-version.patch"
+	"${FILESDIR}/rspamd-9999-cmake-lua-version.patch"
 	"${FILESDIR}/rspamd-2.6-unbundle-lua.patch"
 	"${FILESDIR}/rspamd-2.7-unbundle-zstd.patch"
 	"${FILESDIR}/rspamd-2.5-unbundle-snowball.patch"
