@@ -3,7 +3,7 @@
 
 EAPI=7
 
-PYTHON_COMPAT=( python3_{7,8,9} )
+PYTHON_COMPAT=( python3_{7..9} )
 PYTHON_REQ_USE="xml"
 MY_P="${P/_/}"
 inherit cmake flag-o-matic xdg toolchain-funcs python-single-r1 git-r3
@@ -16,7 +16,7 @@ LICENSE="GPL-2 LGPL-2.1"
 SLOT="0"
 KEYWORDS=""
 IUSE="cdr dbus dia exif graphicsmagick imagemagick inkjar jemalloc jpeg lcms
-openmp postscript spell static-libs svg2 visio wpg"
+openmp postscript readline spell static-libs svg2 visio wpg"
 
 REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 
@@ -67,10 +67,8 @@ COMMON_DEPEND="${PYTHON_DEPS}
 	jemalloc? ( dev-libs/jemalloc )
 	jpeg? ( virtual/jpeg:0 )
 	lcms? ( media-libs/lcms:2 )
-	spell? (
-		app-text/aspell
-		app-text/gtkspell:3
-	)
+	readline? ( sys-libs/readline:= )
+	spell? ( app-text/gspell )
 	visio? (
 		app-text/libwpg:0.3
 		dev-libs/librevenge
@@ -125,6 +123,8 @@ src_configure() {
 		-DWITH_DBUS=$(usex dbus)
 		-DWITH_IMAGE_MAGICK=$(usex imagemagick $(usex !graphicsmagick)) # requires ImageMagick 6, only IM must be enabled
 		-DWITH_GRAPHICS_MAGICK=$(usex graphicsmagick $(usex imagemagick)) # both must be enabled to use GraphicsMagick
+		-DWITH_GNU_READLINE=$(usex readline)
+		-DWITH_GSPELL=$(usex spell)
 		-DWITH_JEMALLOC=$(usex jemalloc)
 		-DENABLE_LCMS=$(usex lcms)
 		-DWITH_OPENMP=$(usex openmp)
@@ -146,7 +146,6 @@ src_install() {
 
 	find "${ED}"/usr/share/man -type f -maxdepth 3 -name '*.gz' -exec gzip -d {} \; || die
 
-	# No extensions are present in beta1
 	local extdir="${ED}"/usr/share/${PN}/extensions
 
 	if [[ -e "${extdir}" ]] && [[ -n $(find "${extdir}" -mindepth 1) ]]; then
