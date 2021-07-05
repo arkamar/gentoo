@@ -1,0 +1,1200 @@
+From c9c74ebbae70e84e7a4cf663ac91d2ed7169bb35 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Petr=20Van=C4=9Bk?= <arkamar@atlas.cz>
+Date: Mon, 5 Jul 2021 10:04:54 +0200
+Subject: [PATCH] Fix sentinel errors for builds against musl libc
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This change fixes failing builds on systems with musl libc, where one
+can experience lots of errors similar to following one:
+
+```
+FAILED: src/libnrtype/CMakeFiles/nrtype_LIB.dir/font-lister.cpp.o
+/usr/bin/c++ ... -c ../src/libnrtype/font-lister.cpp
+../src/libnrtype/font-lister.cpp: In function ‘void font_lister_cell_data_func2(GtkCellLayout*, GtkCellRenderer*, GtkTreeModel*, GtkTreeIter*, gpointer)’:
+../src/libnrtype/font-lister.cpp:1236:64: error: missing sentinel in function call [-Werror=format=]
+ 1236 |     g_object_set(G_OBJECT(cell), "markup", markup.c_str(), NULL);
+      |                                                                ^
+```
+
+Those errors are triggered by the compiler, because musl does not use
+GCC's or Clang's __null extension for NULL definition, because it seems
+non-conforming to the standard's requirements [1]. However, it is
+possible to trigger this error with -Wstrict-null-sentinel GCC flag on
+systems with glibc.
+
+[1]: https://git.musl-libc.org/cgit/musl/commit/?id=c8a9c22173f485c8c053709e1dfa0a617cb6be1a
+
+---
+
+The patch is backported from upstream 1.1.x branch to INKSCAPE_1_0_2 tag.
+
+Upstream-issue: https://gitlab.com/inkscape/inkscape/-/issues/1880
+Upstream-MR: https://gitlab.com/inkscape/inkscape/-/merge_requests/3378
+Backported-from: https://gitlab.com/inkscape/inkscape/-/merge_requests/3378/diffs?commit_id=8d8d7adb07649fa64f9879b56187708ab7166149
+
+diff --git a/src/display/guideline.cpp b/src/display/guideline.cpp
+index d2816f1791..28b3c95d8d 100644
+--- a/src/display/guideline.cpp
++++ b/src/display/guideline.cpp
+@@ -186,11 +186,11 @@ static void sp_guideline_update(SPCanvasItem *item, Geom::Affine const &affine,
+         if (gl->locked) {
+             g_object_set(G_OBJECT(gl->origin), "stroke_color", 0x0000ff88,
+                                                "shape", SP_CTRL_SHAPE_CROSS,
+-                                               "size", 7, NULL);
++                                               "size", 7, nullptr);
+         } else {
+             g_object_set(G_OBJECT(gl->origin), "stroke_color", 0xff000088,
+                                                "shape", SP_CTRL_SHAPE_CIRCLE,
+-                                               "size", 5, NULL);
++                                               "size", 5, nullptr);
+         }
+         gl->origin->moveto(gl->point_on_line);
+         sp_canvas_item_request_update(SP_CANVAS_ITEM(gl->origin));
+@@ -275,7 +275,7 @@ void sp_guideline_set_normal(SPGuideLine *gl, Geom::Point normal_to_line)
+ void sp_guideline_set_color(SPGuideLine *gl, unsigned int rgba)
+ {
+     gl->rgba = rgba;
+-    g_object_set(G_OBJECT(gl->origin), "stroke_color", rgba, NULL);
++    g_object_set(G_OBJECT(gl->origin), "stroke_color", rgba, nullptr);
+     sp_canvas_item_request_update(SP_CANVAS_ITEM(gl));
+ }
+ 
+diff --git a/src/display/nr-filter-image.cpp b/src/display/nr-filter-image.cpp
+index bfc2b6bb1f..5311d8cbce 100644
+--- a/src/display/nr-filter-image.cpp
++++ b/src/display/nr-filter-image.cpp
+@@ -158,7 +158,7 @@ void FilterImage::render_cairo(FilterSlot &slot)
+         if ( !g_file_test( fullname, G_FILE_TEST_EXISTS ) ) {
+             // Try to load from relative position combined with document base
+             if( document ) {
+-                fullname = g_build_filename( document->getDocumentBase(), feImageHref, NULL );
++                fullname = g_build_filename( document->getDocumentBase(), feImageHref, nullptr );
+             }
+         }
+         if ( !g_file_test( fullname, G_FILE_TEST_EXISTS ) ) {
+diff --git a/src/display/snap-indicator.cpp b/src/display/snap-indicator.cpp
+index cb798e612d..628314c64d 100644
+--- a/src/display/snap-indicator.cpp
++++ b/src/display/snap-indicator.cpp
+@@ -284,7 +284,7 @@ SnapIndicator::set_new_snaptarget(Inkscape::SnappedPoint const &p, bool pre_snap
+         // Display the tooltip, which reveals the type of snap source and the type of snap target
+         gchar *tooltip_str = nullptr;
+         if ( (p.getSource() != SNAPSOURCE_GRID_PITCH) && (p.getTarget() != SNAPTARGET_UNDEFINED) ) {
+-            tooltip_str = g_strconcat(source_name, _(" to "), target_name, NULL);
++            tooltip_str = g_strconcat(source_name, _(" to "), target_name, nullptr);
+         } else if (p.getSource() != SNAPSOURCE_UNDEFINED) {
+             tooltip_str = g_strdup(source_name);
+         }
+diff --git a/src/extension/dbus/document-interface.cpp b/src/extension/dbus/document-interface.cpp
+index 2384c5008f..3ec338d4c3 100644
+--- a/src/extension/dbus/document-interface.cpp
++++ b/src/extension/dbus/document-interface.cpp
+@@ -475,7 +475,7 @@ document_interface_spiral (DocumentInterface *doc_interface, int cx, int cy,
+     sp_repr_set_int(newNode, "sodipodi:expansion", 1);
+     gchar * retval = finish_create_shape (doc_interface, error, newNode, (gchar *)"create spiral");
+     //Makes sure there is no fill for spirals by default.
+-    gchar* newString = g_strconcat(newNode->attribute("style"), ";fill:none", NULL);
++    gchar* newString = g_strconcat(newNode->attribute("style"), ";fill:none", nullptr);
+     newNode->setAttribute("style", newString);
+     g_free(newString);
+     return retval;
+diff --git a/src/extension/dependency.cpp b/src/extension/dependency.cpp
+index d017aefa5f..d907fa784c 100644
+--- a/src/extension/dependency.cpp
++++ b/src/extension/dependency.cpp
+@@ -184,7 +184,7 @@ bool Dependency::check ()
+                         break;
+                     }
+                     /* Look for deprecated locations next */
+-                    auto deprloc = g_build_filename("inkex", "deprecated-simple", location.c_str(), NULL);
++                    auto deprloc = g_build_filename("inkex", "deprecated-simple", location.c_str(), nullptr);
+                     std::string tempdepr =
+                         Inkscape::IO::Resource::get_filename(Inkscape::IO::Resource::EXTENSIONS, deprloc, false, true);
+                     g_free(deprloc);
+diff --git a/src/gradient-drag.cpp b/src/gradient-drag.cpp
+index 9e607f5c2f..26dd612b51 100644
+--- a/src/gradient-drag.cpp
++++ b/src/gradient-drag.cpp
+@@ -1481,13 +1481,13 @@ void GrDragger::updateKnotShape()
+         return;
+     GrDraggable *last = draggables.back();
+ 
+-    g_object_set (G_OBJECT (this->knot->item), "shape", gr_knot_shapes[last->point_type], NULL);
++    g_object_set (G_OBJECT (this->knot->item), "shape", gr_knot_shapes[last->point_type], nullptr);
+ 
+     // For highlighting mesh handles corresponding to selected corner
+     if (this->knot->shape == SP_KNOT_SHAPE_TRIANGLE) {
+         this->knot->setFill(GR_KNOT_COLOR_HIGHLIGHT, GR_KNOT_COLOR_MOUSEOVER, GR_KNOT_COLOR_MOUSEOVER, GR_KNOT_COLOR_MOUSEOVER);
+         if (gr_knot_shapes[last->point_type] == SP_KNOT_SHAPE_CIRCLE) {
+-            g_object_set (G_OBJECT (this->knot->item), "shape", SP_KNOT_SHAPE_TRIANGLE, NULL);
++            g_object_set (G_OBJECT (this->knot->item), "shape", SP_KNOT_SHAPE_TRIANGLE, nullptr);
+         }
+     }
+ }
+@@ -1892,7 +1892,7 @@ void  GrDragger::highlightCorner(bool highlight)
+ void GrDragger::select()
+ {
+     this->knot->fill [SP_KNOT_STATE_NORMAL] = GR_KNOT_COLOR_SELECTED;
+-    g_object_set (G_OBJECT (this->knot->item), "fill_color", GR_KNOT_COLOR_SELECTED, NULL);
++    g_object_set (G_OBJECT (this->knot->item), "fill_color", GR_KNOT_COLOR_SELECTED, nullptr);
+     highlightCorner(true);
+ }
+ 
+@@ -1903,7 +1903,7 @@ void GrDragger::deselect()
+ {
+     guint32 fill_color = isA(POINT_MG_CORNER) ? GR_KNOT_COLOR_MESHCORNER : GR_KNOT_COLOR_NORMAL;
+     this->knot->fill [SP_KNOT_STATE_NORMAL] = fill_color;
+-    g_object_set (G_OBJECT (this->knot->item), "fill_color", fill_color, NULL);
++    g_object_set (G_OBJECT (this->knot->item), "fill_color", fill_color, nullptr);
+     highlightCorner(false);
+ }
+ 
+diff --git a/src/helper/pixbuf-ops.cpp b/src/helper/pixbuf-ops.cpp
+index 4c5b9693cb..37d535293c 100644
+--- a/src/helper/pixbuf-ops.cpp
++++ b/src/helper/pixbuf-ops.cpp
+@@ -70,7 +70,7 @@ bool sp_export_jpg_file(SPDocument *doc, gchar const *filename,
+ 
+     gchar c[32];
+     g_snprintf(c, 32, "%f", quality);
+-    gboolean saved = gdk_pixbuf_save(pixbuf->getPixbufRaw(), filename, "jpeg", nullptr, "quality", c, NULL);
++    gboolean saved = gdk_pixbuf_save(pixbuf->getPixbufRaw(), filename, "jpeg", nullptr, "quality", c, nullptr);
+  
+     return saved;
+ }
+diff --git a/src/helper/stock-items.cpp b/src/helper/stock-items.cpp
+index ca96d6b4a9..f8886409ad 100644
+--- a/src/helper/stock-items.cpp
++++ b/src/helper/stock-items.cpp
+@@ -51,7 +51,7 @@ static SPObject * sp_marker_load_from_svg(gchar const *name, SPDocument *current
+     }
+     /* Try to load from document */
+     if (!edoc && !doc) {
+-        gchar *markers = g_build_filename(INKSCAPE_MARKERSDIR, "/markers.svg", NULL);
++        gchar *markers = g_build_filename(INKSCAPE_MARKERSDIR, "/markers.svg", nullptr);
+         if (Inkscape::IO::file_test(markers, G_FILE_TEST_IS_REGULAR)) {
+             doc = SPDocument::createNewDoc(markers, FALSE);
+         }
+@@ -89,12 +89,12 @@ sp_pattern_load_from_svg(gchar const *name, SPDocument *current_doc)
+     }
+     /* Try to load from document */
+     if (!edoc && !doc) {
+-        gchar *patterns = g_build_filename(INKSCAPE_PAINTDIR, "/patterns.svg", NULL);
++        gchar *patterns = g_build_filename(INKSCAPE_PAINTDIR, "/patterns.svg", nullptr);
+         if (Inkscape::IO::file_test(patterns, G_FILE_TEST_IS_REGULAR)) {
+             doc = SPDocument::createNewDoc(patterns, FALSE);
+         }
+         if (!doc) {
+-            gchar *patterns = g_build_filename(CREATE_PAINTDIR, "/patterns.svg", NULL);
++            gchar *patterns = g_build_filename(CREATE_PAINTDIR, "/patterns.svg", nullptr);
+             if (Inkscape::IO::file_test(patterns, G_FILE_TEST_IS_REGULAR)) {
+                 doc = SPDocument::createNewDoc(patterns, FALSE);
+             }
+@@ -132,12 +132,12 @@ sp_gradient_load_from_svg(gchar const *name, SPDocument *current_doc)
+     }
+     /* Try to load from document */
+     if (!edoc && !doc) {
+-        gchar *gradients = g_build_filename(INKSCAPE_PAINTDIR, "/gradients.svg", NULL);
++        gchar *gradients = g_build_filename(INKSCAPE_PAINTDIR, "/gradients.svg", nullptr);
+         if (Inkscape::IO::file_test(gradients, G_FILE_TEST_IS_REGULAR)) {
+             doc = SPDocument::createNewDoc(gradients, FALSE);
+         }
+         if (!doc) {
+-        gchar *gradients = g_build_filename(CREATE_PAINTDIR, "/gradients.svg", NULL);
++        gchar *gradients = g_build_filename(CREATE_PAINTDIR, "/gradients.svg", nullptr);
+         if (Inkscape::IO::file_test(gradients, G_FILE_TEST_IS_REGULAR)) {
+             doc = SPDocument::createNewDoc(gradients, FALSE);
+         }
+diff --git a/src/inkscape.cpp b/src/inkscape.cpp
+index 9d5add7364..a54a41e750 100644
+--- a/src/inkscape.cpp
++++ b/src/inkscape.cpp
+@@ -376,22 +376,22 @@ void Application::add_gtk_css()
+     gboolean gtkApplicationPreferDarkTheme;
+     GtkSettings *settings = gtk_settings_get_default();
+     if (settings) {
+-        g_object_get(settings, "gtk-icon-theme-name", &gtkIconThemeName, NULL);
+-        g_object_get(settings, "gtk-theme-name", &gtkThemeName, NULL);
+-        g_object_get(settings, "gtk-application-prefer-dark-theme", &gtkApplicationPreferDarkTheme, NULL);
++        g_object_get(settings, "gtk-icon-theme-name", &gtkIconThemeName, nullptr);
++        g_object_get(settings, "gtk-theme-name", &gtkThemeName, nullptr);
++        g_object_get(settings, "gtk-application-prefer-dark-theme", &gtkApplicationPreferDarkTheme, nullptr);
+         g_object_set(settings, "gtk-application-prefer-dark-theme",
+-                     prefs->getBool("/theme/preferDarkTheme", gtkApplicationPreferDarkTheme), NULL);
++                     prefs->getBool("/theme/preferDarkTheme", gtkApplicationPreferDarkTheme), nullptr);
+         prefs->setString("/theme/defaultTheme", Glib::ustring(gtkThemeName));
+         prefs->setString("/theme/defaultIconTheme", Glib::ustring(gtkIconThemeName));
+         Glib::ustring gtkthemename = prefs->getString("/theme/gtkTheme");
+         if (gtkthemename != "") {
+-            g_object_set(settings, "gtk-theme-name", gtkthemename.c_str(), NULL);
++            g_object_set(settings, "gtk-theme-name", gtkthemename.c_str(), nullptr);
+         } else {
+             prefs->setString("/theme/gtkTheme", Glib::ustring(gtkThemeName));
+         }
+         themeiconname = prefs->getString("/theme/iconTheme");
+         if (themeiconname != "") {
+-            g_object_set(settings, "gtk-icon-theme-name", themeiconname.c_str(), NULL);
++            g_object_set(settings, "gtk-icon-theme-name", themeiconname.c_str(), nullptr);
+         } else {
+             prefs->setString("/theme/iconTheme", Glib::ustring(gtkIconThemeName));
+         }
+@@ -574,7 +574,7 @@ Application::crash_handler (int /*signum*/)
+             FILE *file = nullptr;
+             for(auto & location : locations) {
+                 if (!location) continue; // It seems to be okay, but just in case
+-                gchar * filename = g_build_filename(location, c, NULL);
++                gchar * filename = g_build_filename(location, c, nullptr);
+                 Inkscape::IO::dump_fopen_call(filename, "E");
+                 file = Inkscape::IO::fopen_utf8name(filename, "w");
+                 if (file) {
+diff --git a/src/io/resource.cpp b/src/io/resource.cpp
+index d7b9731e97..2d15c8b7d5 100644
+--- a/src/io/resource.cpp
++++ b/src/io/resource.cpp
+@@ -74,7 +74,7 @@ gchar *_get_path(Domain domain, Type type, char const *filename)
+             path = g_strdup(temp);
+         } break;
+         case CACHE: {
+-            path = g_build_filename(g_get_user_cache_dir(), "inkscape", NULL);
++            path = g_build_filename(g_get_user_cache_dir(), "inkscape", nullptr);
+         } break;
+         case USER: {
+             char const *name=nullptr;
+@@ -101,7 +101,7 @@ gchar *_get_path(Domain domain, Type type, char const *filename)
+ 
+ 
+     if (filename && path) {
+-        gchar *temp=g_build_filename(path, filename, NULL);
++        gchar *temp=g_build_filename(path, filename, nullptr);
+         g_free(path);
+         path = temp;
+     }
+@@ -406,14 +406,14 @@ char *profile_path(const char *filename)
+             }
+ 
+             if (prefdir) {
+-                const char *prefdir_profile = g_build_filename(prefdir, INKSCAPE_PROFILE_DIR, NULL);
++                const char *prefdir_profile = g_build_filename(prefdir, INKSCAPE_PROFILE_DIR, nullptr);
+                 g_free((void *)prefdir);
+                 prefdir = prefdir_profile;
+             }
+         }
+ #endif
+         if (!prefdir) {
+-            prefdir = g_build_filename(g_get_user_config_dir(), INKSCAPE_PROFILE_DIR, NULL);
++            prefdir = g_build_filename(g_get_user_config_dir(), INKSCAPE_PROFILE_DIR, nullptr);
+             // In case the XDG user config dir of the moment does not yet exist...
+             int mode = S_IRWXU;
+ #ifdef S_IRGRP
+@@ -432,14 +432,14 @@ char *profile_path(const char *filename)
+                 gchar const *userDirs[] = { "keys", "templates", "icons", "extensions", "ui",
+                                             "symbols", "paint", "themes", "palettes", nullptr };
+                 for (gchar const** name = userDirs; *name; ++name) {
+-                    gchar *dir = g_build_filename(prefdir, *name, NULL);
++                    gchar *dir = g_build_filename(prefdir, *name, nullptr);
+                     g_mkdir_with_parents(dir, mode);
+                     g_free(dir);
+                 }
+             }
+         }
+     }
+-    return g_build_filename(prefdir, filename, NULL);
++    return g_build_filename(prefdir, filename, nullptr);
+ }
+ 
+ /*
+@@ -456,7 +456,7 @@ char *homedir_path(const char *filename)
+     static const gchar *homedir = nullptr;
+     homedir = g_get_home_dir();
+ 
+-    return g_build_filename(homedir, filename, NULL);
++    return g_build_filename(homedir, filename, nullptr);
+ }
+ 
+ }
+diff --git a/src/knot-holder-entity.cpp b/src/knot-holder-entity.cpp
+index 15edc33cac..3da1c49956 100644
+--- a/src/knot-holder-entity.cpp
++++ b/src/knot-holder-entity.cpp
+@@ -49,14 +49,14 @@ void KnotHolderEntity::create(SPDesktop *desktop, SPItem *item, KnotHolder *pare
+ 
+     my_counter = KnotHolderEntity::counter++;
+ 
+-    g_object_set(G_OBJECT(knot->item), "shape", shape, NULL);
+-    g_object_set(G_OBJECT(knot->item), "mode", mode, NULL);
++    g_object_set(G_OBJECT(knot->item), "shape", shape, nullptr);
++    g_object_set(G_OBJECT(knot->item), "mode", mode, nullptr);
+ 
+     // TODO base more appearance from this type instead of passing in arbitrary values.
+     knot->item->ctrlType = type;
+ 
+     knot->fill [SP_KNOT_STATE_NORMAL] = color;
+-    g_object_set (G_OBJECT(knot->item), "fill_color", color, NULL);
++    g_object_set (G_OBJECT(knot->item), "fill_color", color, nullptr);
+ 
+     update_knot();
+     knot->show();
+diff --git a/src/knot.cpp b/src/knot.cpp
+index 5dc22cbbda..af8928aefd 100644
+--- a/src/knot.cpp
++++ b/src/knot.cpp
+@@ -475,14 +475,14 @@ void SPKnot::updateCtrl() {
+         return;
+     }
+ 
+-    g_object_set(this->item, "shape", this->shape, NULL);
+-    g_object_set(this->item, "mode", this->mode, NULL);
+-    g_object_set(this->item, "size", this->size, NULL);
+-    g_object_set(this->item, "angle", this->angle, NULL);
+-    g_object_set(this->item, "anchor", this->anchor, NULL);
++    g_object_set(this->item, "shape", this->shape, nullptr);
++    g_object_set(this->item, "mode", this->mode, nullptr);
++    g_object_set(this->item, "size", this->size, nullptr);
++    g_object_set(this->item, "angle", this->angle, nullptr);
++    g_object_set(this->item, "anchor", this->anchor, nullptr);
+ 
+     if (this->pixbuf) {
+-        g_object_set(this->item, "pixbuf", this->pixbuf, NULL);
++        g_object_set(this->item, "pixbuf", this->pixbuf, nullptr);
+     }
+ 
+     this->_setCtrlState();
+@@ -498,8 +498,8 @@ void SPKnot::_setCtrlState() {
+     } else if (this->flags & SP_KNOT_SELECTED) {
+         state = SP_KNOT_STATE_SELECTED;
+     }
+-    g_object_set(this->item, "fill_color",   this->fill[state],   NULL);
+-    g_object_set(this->item, "stroke_color", this->stroke[state], NULL);
++    g_object_set(this->item, "fill_color",   this->fill[state],   nullptr);
++    g_object_set(this->item, "stroke_color", this->stroke[state], nullptr);
+ }
+ 
+ 
+diff --git a/src/libnrtype/font-lister.cpp b/src/libnrtype/font-lister.cpp
+index dcd94d972e..62cd66bf42 100644
+--- a/src/libnrtype/font-lister.cpp
++++ b/src/libnrtype/font-lister.cpp
+@@ -1220,7 +1220,7 @@ void font_lister_cell_data_func2(GtkCellLayout * /*cell_layout*/,
+         g_free(sample_escaped);
+     }
+ 
+-    g_object_set(G_OBJECT(cell), "markup", markup.c_str(), NULL);
++    g_object_set(G_OBJECT(cell), "markup", markup.c_str(), nullptr);
+     g_free(family);
+     g_free(family_escaped);
+ }
+diff --git a/src/object/color-profile.cpp b/src/object/color-profile.cpp
+index cdfea4badf..feb0b9487f 100644
+--- a/src/object/color-profile.cpp
++++ b/src/object/color-profile.cpp
+@@ -732,7 +732,7 @@ std::set<ColorProfile::FilePlusHome> ColorProfile::getBaseProfileDirs() {
+     std::set<ColorProfile::FilePlusHome> sources;
+ 
+     // first try user's local dir
+-    gchar* path = g_build_filename(g_get_user_data_dir(), "color", "icc", NULL);
++    gchar* path = g_build_filename(g_get_user_data_dir(), "color", "icc", nullptr);
+     sources.insert(FilePlusHome(path, true));
+     g_free(path);
+ 
+@@ -740,11 +740,11 @@ std::set<ColorProfile::FilePlusHome> ColorProfile::getBaseProfileDirs() {
+     // (see https://github.com/hughsie/colord/blob/fe10f76536bb27614ced04e0ff944dc6fb4625c0/lib/colord/cd-icc-store.c#L590)
+ 
+     // user store
+-    path = g_build_filename(g_get_user_data_dir(), "icc", NULL);
++    path = g_build_filename(g_get_user_data_dir(), "icc", nullptr);
+     sources.insert(FilePlusHome(path, true));
+     g_free(path);
+ 
+-    path = g_build_filename(g_get_home_dir(), ".color", "icc", NULL);
++    path = g_build_filename(g_get_home_dir(), ".color", "icc", nullptr);
+     sources.insert(FilePlusHome(path, true));
+     g_free(path);
+ 
+@@ -754,7 +754,7 @@ std::set<ColorProfile::FilePlusHome> ColorProfile::getBaseProfileDirs() {
+ 
+     const gchar* const * dataDirs = g_get_system_data_dirs();
+     for ( int i = 0; dataDirs[i]; i++ ) {
+-        gchar* path = g_build_filename(dataDirs[i], "color", "icc", NULL);
++        gchar* path = g_build_filename(dataDirs[i], "color", "icc", nullptr);
+         sources.insert(FilePlusHome(path, false));
+         g_free(path);
+     }
+@@ -764,7 +764,7 @@ std::set<ColorProfile::FilePlusHome> ColorProfile::getBaseProfileDirs() {
+         sources.insert(FilePlusHome("/System/Library/ColorSync/Profiles", false));
+         sources.insert(FilePlusHome("/Library/ColorSync/Profiles", false));
+ 
+-        gchar *path = g_build_filename(g_get_home_dir(), "Library", "ColorSync", "Profiles", NULL);
++        gchar *path = g_build_filename(g_get_home_dir(), "Library", "ColorSync", "Profiles", nullptr);
+         sources.insert(FilePlusHome(path, true));
+         g_free(path);
+     }
+diff --git a/src/object/sp-guide.cpp b/src/object/sp-guide.cpp
+index 8b36f4fe8d..6baf76b78b 100644
+--- a/src/object/sp-guide.cpp
++++ b/src/object/sp-guide.cpp
+@@ -540,7 +540,7 @@ char* SPGuide::description(bool const verbose) const
+         
+         if (verbose) {
+             gchar *oldDescr = descr;
+-            descr = g_strconcat(oldDescr, shortcuts, NULL);
++            descr = g_strconcat(oldDescr, shortcuts, nullptr);
+             g_free(oldDescr);
+         }
+ 
+diff --git a/src/object/sp-image.cpp b/src/object/sp-image.cpp
+index cec0c1299e..c8dbfb2e16 100644
+--- a/src/object/sp-image.cpp
++++ b/src/object/sp-image.cpp
+@@ -790,7 +790,7 @@ void sp_embed_image(Inkscape::XML::Node *image_node, Inkscape::Pixbuf *pb)
+     if (data == nullptr) {
+         // if there is no supported MIME data, embed as PNG
+         data_mimetype = "image/png";
+-        gdk_pixbuf_save_to_buffer(pb->getPixbufRaw(), reinterpret_cast<gchar**>(&data), &len, "png", nullptr, NULL);
++        gdk_pixbuf_save_to_buffer(pb->getPixbufRaw(), reinterpret_cast<gchar**>(&data), &len, "png", nullptr, nullptr);
+         free_data = true;
+     }
+ 
+diff --git a/src/rdf.cpp b/src/rdf.cpp
+index 86864cb1ca..7a9c99d072 100644
+--- a/src/rdf.cpp
++++ b/src/rdf.cpp
+@@ -539,7 +539,7 @@ const gchar *RDFImpl::getReprText( Inkscape::XML::Node const * repr, struct rdf_
+                     const gchar * str = temp->firstChild()->content();
+                     if (bag) {
+                         holder = bag;
+-                        bag = g_strconcat(holder, ", ", str, NULL);
++                        bag = g_strconcat(holder, ", ", str, nullptr);
+                         g_free(holder);
+                     }
+                     else {
+diff --git a/src/selection-chemistry.cpp b/src/selection-chemistry.cpp
+index 6a59b8b628..7dfed2206a 100644
+--- a/src/selection-chemistry.cpp
++++ b/src/selection-chemistry.cpp
+@@ -3683,7 +3683,7 @@ void ObjectSet::createBitmapCopy()
+     if (directory == nullptr) {
+         directory = Inkscape::IO::Resource::homedir_path(nullptr);
+     }
+-    gchar *filepath = g_build_filename(directory, basename, NULL);
++    gchar *filepath = g_build_filename(directory, basename, nullptr);
+     g_free(directory);
+ 
+     //g_print("%s\n", filepath);
+diff --git a/src/seltrans.cpp b/src/seltrans.cpp
+index 96e6b2c94a..a318b7cab4 100644
+--- a/src/seltrans.cpp
++++ b/src/seltrans.cpp
+@@ -762,7 +762,7 @@ void Inkscape::SelTrans::handleGrab(SPKnot *knot, guint /*state*/, SPSelTransHan
+             g_object_set(G_OBJECT(_grip),
+                          "shape", SP_CTRL_SHAPE_BITMAP,
+                          "size", 13,
+-                         NULL);
++                         nullptr);
+             sp_canvas_item_hide(_norm);
+             sp_canvas_item_show(_grip);
+             break;
+@@ -770,7 +770,7 @@ void Inkscape::SelTrans::handleGrab(SPKnot *knot, guint /*state*/, SPSelTransHan
+             g_object_set(G_OBJECT(_grip),
+                          "shape", SP_CTRL_SHAPE_CROSS,
+                          "size", 7,
+-                         NULL);
++                         nullptr);
+             sp_canvas_item_show(_norm);
+             sp_canvas_item_show(_grip);
+             break;
+diff --git a/src/ui/clipboard.cpp b/src/ui/clipboard.cpp
+index 0914293aa4..8c5f787df9 100644
+--- a/src/ui/clipboard.cpp
++++ b/src/ui/clipboard.cpp
+@@ -1108,7 +1108,7 @@ bool ClipboardManagerImpl::_pasteImage(SPDocument *doc)
+     prefs->setBool("/dialogs/import/ask", false);
+     png->set_gui(false);
+ 
+-    gchar *filename = g_build_filename( g_get_user_cache_dir(), "inkscape-clipboard-import", NULL );
++    gchar *filename = g_build_filename( g_get_user_cache_dir(), "inkscape-clipboard-import", nullptr );
+     img->save(filename, "png");
+     file_import(doc, filename, png);
+     g_free(filename);
+@@ -1251,7 +1251,7 @@ SPDocument *ClipboardManagerImpl::_retrieveClipboard(Glib::ustring required_targ
+ 
+     // FIXME: Temporary hack until we add memory input.
+     // Save the clipboard contents to some file, then read it
+-    gchar *filename = g_build_filename( g_get_user_cache_dir(), "inkscape-clipboard-import", NULL );
++    gchar *filename = g_build_filename( g_get_user_cache_dir(), "inkscape-clipboard-import", nullptr );
+ 
+     bool file_saved = false;
+     Glib::ustring target = best_target;
+@@ -1355,7 +1355,7 @@ void ClipboardManagerImpl::_onGet(Gtk::SelectionData &sel, guint /*info*/)
+ 
+     // FIXME: Temporary hack until we add support for memory output.
+     // Save to a temporary file, read it back and then set the clipboard contents
+-    gchar *filename = g_build_filename( g_get_user_cache_dir(), "inkscape-clipboard-export", NULL );
++    gchar *filename = g_build_filename( g_get_user_cache_dir(), "inkscape-clipboard-export", nullptr );
+     gchar *data = nullptr;
+     gsize len;
+ 
+@@ -1609,7 +1609,7 @@ void ClipboardManagerImpl::_setClipboardTargets()
+             if ( out != outlist.end() ) {
+                 // FIXME: Temporary hack until we add support for memory output.
+                 // Save to a temporary file, read it back and then set the clipboard contents
+-                gchar *filename = g_build_filename( g_get_user_cache_dir(), "inkscape-clipboard-export.emf", NULL );
++                gchar *filename = g_build_filename( g_get_user_cache_dir(), "inkscape-clipboard-export.emf", nullptr );
+ 
+                 try {
+                     (*out)->save(_clipboardSPDoc, filename);
+diff --git a/src/ui/control-manager.cpp b/src/ui/control-manager.cpp
+index 0330b5be37..dfd5fea96b 100644
+--- a/src/ui/control-manager.cpp
++++ b/src/ui/control-manager.cpp
+@@ -297,7 +297,7 @@ void ControlManagerImpl::updateItem(SPCanvasItem *item)
+ {
+     if (item) {
+         unsigned int target = _sizeTable[item->ctrlType][_size - 1] + item->ctrlResize;
+-        g_object_set(item, "size", target, NULL);
++        g_object_set(item, "size", target, nullptr);
+ 
+         sp_canvas_item_request_update(item);
+     }
+@@ -314,7 +314,7 @@ bool ControlManagerImpl::setControlType(SPCanvasItem *item, ControlType type)
+             unsigned int targetSize = _sizeTable[type][_size - 1] + item->ctrlResize;
+             SPCtrlShapeType targetShape = _ctrlToShape[type];
+ 
+-            g_object_set(item, "shape", targetShape, "size", targetSize, NULL);
++            g_object_set(item, "shape", targetShape, "size", targetSize, nullptr);
+             item->ctrlType = type;
+             accepted = true;
+         }
+@@ -332,7 +332,7 @@ bool ControlManagerImpl::setControlResize(SPCanvasItem *item, int ctrlResize)
+     if(item) {
+         item->ctrlResize = ctrlResize;
+         unsigned int targetSize = _sizeTable[item->ctrlType][_size - 1] + item->ctrlResize;
+-        g_object_set(item, "size", targetSize, NULL);
++        g_object_set(item, "size", targetSize, nullptr);
+         return true;
+     }
+     return false;
+@@ -351,7 +351,7 @@ void ControlManagerImpl::setSelected(SPCanvasItem *item, bool selected)
+ 
+         // TODO refresh colors
+         unsigned int targetSize = _sizeTable[item->ctrlType][_size - 1] + item->ctrlResize;
+-        g_object_set(item, "size", targetSize, NULL);
++        g_object_set(item, "size", targetSize, nullptr);
+     }
+ }
+ 
+diff --git a/src/ui/dialog/clonetiler.cpp b/src/ui/dialog/clonetiler.cpp
+index edc88ba00e..6b75e768d7 100644
+--- a/src/ui/dialog/clonetiler.cpp
++++ b/src/ui/dialog/clonetiler.cpp
+@@ -138,7 +138,7 @@ CloneTiler::CloneTiler () :
+             auto cell_list = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(combo->gobj()));
+             gtk_cell_layout_set_attributes(GTK_CELL_LAYOUT(combo->gobj()),
+                                            GTK_CELL_RENDERER(cell_list->data),
+-                                           "markup", 0, NULL);
++                                           "markup", 0, nullptr);
+ 
+             for (const auto & sg : sym_groups) {
+                 // Add the description of the symgroup to a new row
+diff --git a/src/ui/dialog/export.cpp b/src/ui/dialog/export.cpp
+index 7d6855949b..4f5383859b 100644
+--- a/src/ui/dialog/export.cpp
++++ b/src/ui/dialog/export.cpp
+@@ -470,7 +470,7 @@ void Export::set_default_filename () {
+                 extension_point = g_strrstr(uri_copy, old_extension);
+                 extension_point[0] = '\0';
+ 
+-                final_name = g_strconcat(uri_copy, ".png", NULL);
++                final_name = g_strconcat(uri_copy, ".png", nullptr);
+                 filename_entry.set_text(final_name);
+                 filename_entry.set_position(strlen(final_name));
+ 
+@@ -478,7 +478,7 @@ void Export::set_default_filename () {
+                 g_free(uri_copy);
+             }
+         } else {
+-            gchar *name = g_strconcat(uri, ".png", NULL);
++            gchar *name = g_strconcat(uri, ".png", nullptr);
+             filename_entry.set_text(name);
+             filename_entry.set_position(strlen(name));
+ 
+@@ -1292,7 +1292,7 @@ void Export::onBrowse ()
+                                       GTK_FILE_CHOOSER_ACTION_SAVE,
+                                       _("_Cancel"), GTK_RESPONSE_CANCEL,
+                                       _("_Save"),   GTK_RESPONSE_ACCEPT,
+-                                      NULL );
++                                      nullptr );
+ 
+     gtk_file_chooser_set_local_only(GTK_FILE_CHOOSER(fs), false);
+ 
+diff --git a/src/ui/dialog/inkscape-preferences.cpp b/src/ui/dialog/inkscape-preferences.cpp
+index 72a8107063..411a71aacd 100644
+--- a/src/ui/dialog/inkscape-preferences.cpp
++++ b/src/ui/dialog/inkscape-preferences.cpp
+@@ -563,7 +563,7 @@ static void _inkscape_fill_gtk(const gchar *path, GHashTable *t)
+         return;
+ 
+     while ((dir_entry = g_dir_read_name(dir))) {
+-        gchar *filename = g_build_filename(path, dir_entry, "gtk-3.0", "gtk.css", NULL);
++        gchar *filename = g_build_filename(path, dir_entry, "gtk-3.0", "gtk.css", nullptr);
+ 
+         if (g_file_test(filename, G_FILE_TEST_IS_REGULAR) && !g_hash_table_contains(t, dir_entry))
+             g_hash_table_add(t, g_strdup(dir_entry));
+@@ -780,8 +780,8 @@ void InkscapePreferences::themeChange()
+         Glib::ustring themename = prefs->getString("/theme/gtkTheme");
+         Glib::ustring themeiconname = prefs->getString("/theme/iconTheme");
+         GtkSettings *settings = gtk_settings_get_default();
+-        g_object_set(settings, "gtk-theme-name", themename.c_str(), NULL);
+-        g_object_set(settings, "gtk-application-prefer-dark-theme", darktheme, NULL);
++        g_object_set(settings, "gtk-theme-name", themename.c_str(), nullptr);
++        g_object_set(settings, "gtk-application-prefer-dark-theme", darktheme, nullptr);
+         bool dark = themename.find(":dark") != std::string::npos;
+         if (!dark) {
+             Glib::RefPtr<Gtk::StyleContext> stylecontext = window->get_style_context();
+@@ -816,7 +816,7 @@ void InkscapePreferences::symbolicThemeCheck()
+     GtkSettings *settings = gtk_settings_get_default();
+     if (settings) {
+         if (themeiconname != "") {
+-            g_object_set(settings, "gtk-icon-theme-name", themeiconname.c_str(), NULL);
++            g_object_set(settings, "gtk-icon-theme-name", themeiconname.c_str(), nullptr);
+         }
+     }
+     if (prefs->getString("/theme/defaultIconTheme") != prefs->getString("/theme/iconTheme")) {
+@@ -1087,17 +1087,17 @@ void InkscapePreferences::initPageUI()
+         }
+         g_strfreev(builtin_themes);
+ 
+-        path = g_build_filename(g_get_user_data_dir(), "themes", NULL);
++        path = g_build_filename(g_get_user_data_dir(), "themes", nullptr);
+         _inkscape_fill_gtk(path, t);
+         g_free(path);
+ 
+-        path = g_build_filename(g_get_home_dir(), ".themes", NULL);
++        path = g_build_filename(g_get_home_dir(), ".themes", nullptr);
+         _inkscape_fill_gtk(path, t);
+         g_free(path);
+ 
+         dirs = g_get_system_data_dirs();
+         for (i = 0; dirs[i]; i++) {
+-            path = g_build_filename(dirs[i], "themes", NULL);
++            path = g_build_filename(dirs[i], "themes", nullptr);
+             _inkscape_fill_gtk(path, t);
+             g_free(path);
+         }
+@@ -1123,7 +1123,7 @@ void InkscapePreferences::initPageUI()
+         _page_theme.add_line(false, _("Change Gtk theme:"), _gtk_theme, "", "", false);
+         _gtk_theme.signal_changed().connect(sigc::mem_fun(*this, &InkscapePreferences::themeChange));
+     }
+-    _sys_user_themes_dir_copy.init(g_build_filename(g_get_user_data_dir(), "themes", NULL), _("Open themes folder"));
++    _sys_user_themes_dir_copy.init(g_build_filename(g_get_user_data_dir(), "themes", nullptr), _("Open themes folder"));
+     _page_theme.add_line(true, _("User themes: "), _sys_user_themes_dir_copy, "", _("Location of the user’s themes"), true, Gtk::manage(new Gtk::Box()));
+     _dark_theme.init(_("Use dark theme"), "/theme/preferDarkTheme", false);
+     _page_theme.add_line(true, "", _dark_theme, "", _("Use dark theme"), true);
+@@ -2566,7 +2566,7 @@ void InkscapePreferences::initPageSystem()
+     _page_system.add_line(true, _("User extensions: "), _sys_user_extension_dir, "",
+                           _("Location of the user’s extensions"), true);
+ 
+-    _sys_user_themes_dir.init(g_build_filename(g_get_user_data_dir(), "themes", NULL), _("Open themes folder"));
++    _sys_user_themes_dir.init(g_build_filename(g_get_user_data_dir(), "themes", nullptr), _("Open themes folder"));
+     _page_system.add_line(true, _("User themes: "), _sys_user_themes_dir, "", _("Location of the user’s themes"), true);
+ 
+     _sys_user_icons_dir.init((char const *)IO::Resource::get_path(IO::Resource::USER, IO::Resource::ICONS, ""),
+diff --git a/src/ui/drag-and-drop.cpp b/src/ui/drag-and-drop.cpp
+index d96d3e6098..c440692964 100644
+--- a/src/ui/drag-and-drop.cpp
++++ b/src/ui/drag-and-drop.cpp
+@@ -428,7 +428,7 @@ ink_drag_data_received(GtkWidget *widget,
+             ext->set_param_optiongroup("link", "embed");
+             ext->set_gui(false);
+ 
+-            gchar *filename = g_build_filename( g_get_tmp_dir(), "inkscape-dnd-import", NULL );
++            gchar *filename = g_build_filename( g_get_tmp_dir(), "inkscape-dnd-import", nullptr );
+             g_file_set_contents(filename,
+                 reinterpret_cast<gchar const *>(gtk_selection_data_get_data (data)),
+                 gtk_selection_data_get_length (data),
+diff --git a/src/ui/draw-anchor.cpp b/src/ui/draw-anchor.cpp
+index 1b32525051..5977fd21a6 100644
+--- a/src/ui/draw-anchor.cpp
++++ b/src/ui/draw-anchor.cpp
+@@ -80,7 +80,7 @@ SPDrawAnchor *sp_draw_anchor_test(SPDrawAnchor *anchor, Geom::Point w, bool acti
+     if ( activate && ( Geom::LInfty( w - anchor->dc->getDesktop().d2w(anchor->dp) ) <= (ctrl->box.width() / 2.0) ) ) {
+         if (!anchor->active) {
+             ControlManager::getManager().setControlResize(anchor->ctrl, 4);
+-            g_object_set(anchor->ctrl, "fill_color", FILL_COLOR_MOUSEOVER, NULL);
++            g_object_set(anchor->ctrl, "fill_color", FILL_COLOR_MOUSEOVER, nullptr);
+             anchor->active = TRUE;
+         }
+         return anchor;
+@@ -88,7 +88,7 @@ SPDrawAnchor *sp_draw_anchor_test(SPDrawAnchor *anchor, Geom::Point w, bool acti
+ 
+     if (anchor->active) {
+         ControlManager::getManager().setControlResize(anchor->ctrl, 0);
+-        g_object_set(anchor->ctrl, "fill_color", FILL_COLOR_NORMAL, NULL);
++        g_object_set(anchor->ctrl, "fill_color", FILL_COLOR_NORMAL, nullptr);
+         anchor->active = FALSE;
+     }
+ 
+diff --git a/src/ui/interface.cpp b/src/ui/interface.cpp
+index dba6051a91..be07d856c6 100644
+--- a/src/ui/interface.cpp
++++ b/src/ui/interface.cpp
+@@ -238,7 +238,7 @@ sp_ui_overwrite_file(gchar const *filename)
+         gtk_dialog_add_buttons( GTK_DIALOG(dialog),
+                                 _("_Cancel"), GTK_RESPONSE_NO,
+                                 _("Replace"), GTK_RESPONSE_YES,
+-                                NULL );
++                                nullptr );
+         gtk_dialog_set_default_response( GTK_DIALOG(dialog), GTK_RESPONSE_YES );
+ 
+         if ( gtk_dialog_run( GTK_DIALOG(dialog) ) == GTK_RESPONSE_YES ) {
+diff --git a/src/ui/tool/control-point.cpp b/src/ui/tool/control-point.cpp
+index c6f18f2c64..6f0fc96ef3 100644
+--- a/src/ui/tool/control-point.cpp
++++ b/src/ui/tool/control-point.cpp
+@@ -84,7 +84,7 @@ ControlPoint::ControlPoint(SPDesktop *d, Geom::Point const &initial_pos, SPAncho
+         "shape", SP_CTRL_SHAPE_BITMAP, "pixbuf", pixbuf->gobj(),
+         "filled", TRUE, "fill_color", _cset.normal.fill,
+         "stroked", TRUE, "stroke_color", _cset.normal.stroke,
+-        "mode", SP_CTRL_MODE_XOR, NULL);
++        "mode", SP_CTRL_MODE_XOR, nullptr);
+ 
+     _commonInit();
+ }
+@@ -105,7 +105,7 @@ ControlPoint::ControlPoint(SPDesktop *d, Geom::Point const &initial_pos, SPAncho
+                  "anchor", anchor,
+                  "filled", TRUE, "fill_color", _cset.normal.fill,
+                  "stroked", TRUE, "stroke_color", _cset.normal.stroke,
+-                 "mode", SP_CTRL_MODE_XOR, NULL);
++                 "mode", SP_CTRL_MODE_XOR, nullptr);
+     _commonInit();
+ }
+ 
+@@ -168,28 +168,28 @@ Glib::ustring ControlPoint::format_tip(char const *format, ...)
+ unsigned int ControlPoint::_size() const
+ {
+     unsigned int ret;
+-    g_object_get(_canvas_item, "size", &ret, NULL);
++    g_object_get(_canvas_item, "size", &ret, nullptr);
+     return ret;
+ }
+ 
+ SPCtrlShapeType ControlPoint::_shape() const
+ {
+     SPCtrlShapeType ret;
+-    g_object_get(_canvas_item, "shape", &ret, NULL);
++    g_object_get(_canvas_item, "shape", &ret, nullptr);
+     return ret;
+ }
+ 
+ SPAnchorType ControlPoint::_anchor() const
+ {
+     SPAnchorType ret;
+-    g_object_get(_canvas_item, "anchor", &ret, NULL);
++    g_object_get(_canvas_item, "anchor", &ret, nullptr);
+     return ret;
+ }
+ 
+ Glib::RefPtr<Gdk::Pixbuf> ControlPoint::_pixbuf()
+ {
+     GdkPixbuf *ret;
+-    g_object_get(_canvas_item, "pixbuf", &ret, NULL);
++    g_object_get(_canvas_item, "pixbuf", &ret, nullptr);
+     return Glib::wrap(ret);
+ }
+ 
+@@ -197,7 +197,7 @@ Glib::RefPtr<Gdk::Pixbuf> ControlPoint::_pixbuf()
+ 
+ void ControlPoint::_setSize(unsigned int size)
+ {
+-    g_object_set(_canvas_item, "size", size, NULL);
++    g_object_set(_canvas_item, "size", size, nullptr);
+ }
+ 
+ bool ControlPoint::_setControlType(Inkscape::ControlType type)
+@@ -207,12 +207,12 @@ bool ControlPoint::_setControlType(Inkscape::ControlType type)
+ 
+ void ControlPoint::_setAnchor(SPAnchorType anchor)
+ {
+-    g_object_set(_canvas_item, "anchor", anchor, NULL);
++    g_object_set(_canvas_item, "anchor", anchor, nullptr);
+ }
+ 
+ void ControlPoint::_setPixbuf(Glib::RefPtr<Gdk::Pixbuf> p)
+ {
+-    g_object_set(_canvas_item, "pixbuf", Glib::unwrap(p), NULL);
++    g_object_set(_canvas_item, "pixbuf", Glib::unwrap(p), nullptr);
+ }
+ 
+ // re-routes events into the virtual function
+@@ -575,7 +575,7 @@ void ControlPoint::_handleControlStyling()
+ 
+ void ControlPoint::_setColors(ColorEntry colors)
+ {
+-    g_object_set(_canvas_item, "fill_color", colors.fill, "stroke_color", colors.stroke, NULL);
++    g_object_set(_canvas_item, "fill_color", colors.fill, "stroke_color", colors.stroke, nullptr);
+ }
+ 
+ bool ControlPoint::_isLurking()
+diff --git a/src/ui/toolbar/arc-toolbar.cpp b/src/ui/toolbar/arc-toolbar.cpp
+index 6c17ab12d2..4e6b94db1a 100644
+--- a/src/ui/toolbar/arc-toolbar.cpp
++++ b/src/ui/toolbar/arc-toolbar.cpp
+@@ -308,7 +308,7 @@ ArcToolbar::startend_value_changed(Glib::RefPtr<Gtk::Adjustment>&  adj,
+     // in turn, prevent listener from responding
+     _freeze = true;
+ 
+-    gchar* namespaced_name = g_strconcat("sodipodi:", value_name, NULL);
++    gchar* namespaced_name = g_strconcat("sodipodi:", value_name, nullptr);
+ 
+     bool modmade = false;
+     auto itemlist= _desktop->getSelection()->items();
+diff --git a/src/ui/toolbar/spiral-toolbar.cpp b/src/ui/toolbar/spiral-toolbar.cpp
+index 35981c1da7..92d562c117 100644
+--- a/src/ui/toolbar/spiral-toolbar.cpp
++++ b/src/ui/toolbar/spiral-toolbar.cpp
+@@ -176,7 +176,7 @@ SpiralToolbar::value_changed(Glib::RefPtr<Gtk::Adjustment> &adj,
+     // in turn, prevent listener from responding
+     _freeze = true;
+ 
+-    gchar* namespaced_name = g_strconcat("sodipodi:", value_name.data(), NULL);
++    gchar* namespaced_name = g_strconcat("sodipodi:", value_name.data(), nullptr);
+ 
+     bool modmade = false;
+     auto itemlist= _desktop->getSelection()->items();
+diff --git a/src/ui/tools/gradient-tool.cpp b/src/ui/tools/gradient-tool.cpp
+index 6cb00fcc65..606dbc813d 100644
+--- a/src/ui/tools/gradient-tool.cpp
++++ b/src/ui/tools/gradient-tool.cpp
+@@ -120,7 +120,7 @@ void GradientTool::selection_changed(Inkscape::Selection*) {
+                 _("%s selected"),
+                 //TRANSLATORS: Mind the space in front. This is part of a compound message
+                 ngettext(" out of %d gradient handle"," out of %d gradient handles",n_tot),
+-                ngettext(" on %d selected object"," on %d selected objects",n_obj),NULL);
++                ngettext(" on %d selected object"," on %d selected objects",n_obj),nullptr);
+             rc->message_context->setF(Inkscape::NORMAL_MESSAGE,
+                                        message,_(gr_handle_descr[drag->singleSelectedDraggerSingleDraggableType()]), n_tot, n_obj);
+         } else {
+@@ -129,14 +129,14 @@ void GradientTool::selection_changed(Inkscape::Selection*) {
+                 ngettext("One handle merging %d stop (drag with <b>Shift</b> to separate) selected",
+                          "One handle merging %d stops (drag with <b>Shift</b> to separate) selected",drag->singleSelectedDraggerNumDraggables()),
+                 ngettext(" out of %d gradient handle"," out of %d gradient handles",n_tot),
+-                ngettext(" on %d selected object"," on %d selected objects",n_obj),NULL);
++                ngettext(" on %d selected object"," on %d selected objects",n_obj),nullptr);
+             rc->message_context->setF(Inkscape::NORMAL_MESSAGE,message,drag->singleSelectedDraggerNumDraggables(), n_tot, n_obj);
+         }
+     } else if (n_sel > 1) {
+         //TRANSLATORS: The plural refers to number of selected gradient handles. This is part of a compound message (part two indicates selected object count)
+         gchar * message = g_strconcat(ngettext("<b>%d</b> gradient handle selected out of %d","<b>%d</b> gradient handles selected out of %d",n_sel),
+                                       //TRANSLATORS: Mind the space in front. (Refers to gradient handles selected). This is part of a compound message
+-                                      ngettext(" on %d selected object"," on %d selected objects",n_obj),NULL);
++                                      ngettext(" on %d selected object"," on %d selected objects",n_obj),nullptr);
+         rc->message_context->setF(Inkscape::NORMAL_MESSAGE,message, n_sel, n_tot, n_obj);
+     } else if (n_sel == 0) {
+         rc->message_context->setF(Inkscape::NORMAL_MESSAGE,
+diff --git a/src/ui/tools/mesh-tool.cpp b/src/ui/tools/mesh-tool.cpp
+index e7f2444fec..02b6f2fea1 100644
+--- a/src/ui/tools/mesh-tool.cpp
++++ b/src/ui/tools/mesh-tool.cpp
+@@ -136,7 +136,7 @@ void MeshTool::selection_changed(Inkscape::Selection* /*sel*/) {
+                 _("%s selected"),
+                 //TRANSLATORS: Mind the space in front. This is part of a compound message
+                 ngettext(" out of %d mesh handle"," out of %d mesh handles",n_tot),
+-                ngettext(" on %d selected object"," on %d selected objects",n_obj),NULL);
++                ngettext(" on %d selected object"," on %d selected objects",n_obj),nullptr);
+             this->message_context->setF(Inkscape::NORMAL_MESSAGE,
+                                        message,_(ms_handle_descr[drag->singleSelectedDraggerSingleDraggableType()]), n_tot, n_obj);
+         } else {
+@@ -147,7 +147,7 @@ void MeshTool::selection_changed(Inkscape::Selection* /*sel*/) {
+                              "One handle merging %d stops (drag with <b>Shift</b> to separate) selected",
+                              drag->singleSelectedDraggerNumDraggables()),
+                     ngettext(" out of %d mesh handle"," out of %d mesh handles",n_tot),
+-                    ngettext(" on %d selected object"," on %d selected objects",n_obj),NULL);
++                    ngettext(" on %d selected object"," on %d selected objects",n_obj),nullptr);
+             this->message_context->setF(Inkscape::NORMAL_MESSAGE,message,drag->singleSelectedDraggerNumDraggables(), n_tot, n_obj);
+         }
+     } else if (n_sel > 1) {
+@@ -155,7 +155,7 @@ void MeshTool::selection_changed(Inkscape::Selection* /*sel*/) {
+         gchar * message =
+             g_strconcat(ngettext("<b>%d</b> mesh handle selected out of %d","<b>%d</b> mesh handles selected out of %d",n_sel),
+                         //TRANSLATORS: Mind the space in front. (Refers to gradient handles selected). This is part of a compound message
+-                        ngettext(" on %d selected object"," on %d selected objects",n_obj),NULL);
++                        ngettext(" on %d selected object"," on %d selected objects",n_obj),nullptr);
+         this->message_context->setF(Inkscape::NORMAL_MESSAGE,message, n_sel, n_tot, n_obj);
+     } else if (n_sel == 0) {
+         this->message_context->setF(Inkscape::NORMAL_MESSAGE,
+diff --git a/src/ui/tools/text-tool.cpp b/src/ui/tools/text-tool.cpp
+index 5c2e2cae92..a5e86d970f 100644
+--- a/src/ui/tools/text-tool.cpp
++++ b/src/ui/tools/text-tool.cpp
+@@ -120,8 +120,8 @@ TextTool::~TextTool() {
+ void TextTool::setup() {
+     GtkSettings* settings = gtk_settings_get_default();
+     gint timeout = 0;
+-    g_object_get( settings, "gtk-cursor-blink-time", &timeout, NULL );
+-    
++    g_object_get( settings, "gtk-cursor-blink-time", &timeout, nullptr );
++
+     if (timeout < 0) {
+         timeout = 200;
+     } else {
+diff --git a/src/ui/widget/color-icc-selector.cpp b/src/ui/widget/color-icc-selector.cpp
+index 31006052b7..e554ca6df6 100644
+--- a/src/ui/widget/color-icc-selector.cpp
++++ b/src/ui/widget/color-icc-selector.cpp
+@@ -374,7 +374,7 @@ void ColorICCSelector::init()
+ 
+     GtkCellRenderer *renderer = gtk_cell_renderer_text_new();
+     gtk_cell_layout_pack_start(GTK_CELL_LAYOUT(_impl->_profileSel), renderer, TRUE);
+-    gtk_cell_layout_set_attributes(GTK_CELL_LAYOUT(_impl->_profileSel), renderer, "text", 0, NULL);
++    gtk_cell_layout_set_attributes(GTK_CELL_LAYOUT(_impl->_profileSel), renderer, "text", 0, nullptr);
+ 
+     GtkTreeIter iter;
+     gtk_list_store_append(store, &iter);
+diff --git a/src/ui/widget/combo-box-entry-tool-item.cpp b/src/ui/widget/combo-box-entry-tool-item.cpp
+index 9adcca111d..c0459afb86 100644
+--- a/src/ui/widget/combo-box-entry-tool-item.cpp
++++ b/src/ui/widget/combo-box-entry-tool-item.cpp
+@@ -75,8 +75,8 @@ ComboBoxEntryToolItem::ComboBoxEntryToolItem(Glib::ustring name,
+     set_name(name);
+ 
+     gchar *action_name = g_strdup( get_name().c_str() );
+-    gchar *combobox_name = g_strjoin( nullptr, action_name, "_combobox", NULL );
+-    gchar *entry_name =    g_strjoin( nullptr, action_name, "_entry", NULL );
++    gchar *combobox_name = g_strjoin( nullptr, action_name, "_combobox", nullptr );
++    gchar *entry_name =    g_strjoin( nullptr, action_name, "_entry", nullptr );
+     g_free( action_name );
+ 
+     GtkWidget* comboBoxEntry = gtk_combo_box_new_with_model_and_entry (_model);
+diff --git a/src/ui/widget/dock-item.cpp b/src/ui/widget/dock-item.cpp
+index 01786d5241..1a1d24d4d0 100644
+--- a/src/ui/widget/dock-item.cpp
++++ b/src/ui/widget/dock-item.cpp
+@@ -160,7 +160,7 @@ DockItem::set_title(Glib::ustring title)
+ {
+     g_object_set (_gdl_dock_item,
+                   "long-name", title.c_str(),
+-                  NULL);
++                  nullptr);
+ 
+     gdl_dock_item_set_tablabel(GDL_DOCK_ITEM(_gdl_dock_item),
+                                gtk_label_new (title.c_str()));
+diff --git a/src/ui/widget/dock.cpp b/src/ui/widget/dock.cpp
+index 97202961ef..278af122cd 100644
+--- a/src/ui/widget/dock.cpp
++++ b/src/ui/widget/dock.cpp
+@@ -99,11 +99,11 @@ Dock::Dock(Gtk::Orientation orientation)
+     
+     g_object_get(GDL_DOCK_OBJECT(_gdl_dock),
+             "master", &master,
+-            NULL);
+-    
++            nullptr);
++
+     g_object_set(master,
+             "switcher-style", gdl_switcher_style,
+-            NULL);
++            nullptr);
+ 
+     GdlDockBarStyle gdl_dock_bar_style =
+         static_cast<GdlDockBarStyle>(prefs->getIntLimited("/options/dock/dockbarstyle",
+diff --git a/src/util/units.cpp b/src/util/units.cpp
+index d24ec3c25d..d9b69f8a8d 100644
+--- a/src/util/units.cpp
++++ b/src/util/units.cpp
+@@ -256,7 +256,7 @@ Unit UnitTable::_empty_unit;
+ 
+ UnitTable::UnitTable()
+ {
+-    gchar *filename = g_build_filename(INKSCAPE_UIDIR, "units.xml", NULL);
++    gchar *filename = g_build_filename(INKSCAPE_UIDIR, "units.xml", nullptr);
+     load(filename);
+     g_free(filename);
+ }
+diff --git a/src/vanishing-point.cpp b/src/vanishing-point.cpp
+index 1b7d80653b..2c4294cdc6 100644
+--- a/src/vanishing-point.cpp
++++ b/src/vanishing-point.cpp
+@@ -349,7 +349,7 @@ void VPDragger::updateTip()
+             ngettext("shared by <b>%d</b> box; drag with <b>Shift</b> to separate selected box(es)",
+                      "shared by <b>%d</b> boxes; drag with <b>Shift</b> to separate selected box(es)", num),
+             num);
+-        this->knot->tip = g_strconcat(desc1, desc2, NULL);
++        this->knot->tip = g_strconcat(desc1, desc2, nullptr);
+         g_free(desc1);
+         g_free(desc2);
+     }
+diff --git a/src/widgets/desktop-widget.cpp b/src/widgets/desktop-widget.cpp
+index 491ce4158c..bc1936bb45 100644
+--- a/src/widgets/desktop-widget.cpp
++++ b/src/widgets/desktop-widget.cpp
+@@ -918,8 +918,8 @@ sp_desktop_widget_realize (GtkWidget *widget)
+     GtkSettings *settings = gtk_settings_get_default();
+     Gtk::Window *window = SP_ACTIVE_DESKTOP->getToplevel();
+     if (settings && window) {
+-        g_object_get(settings, "gtk-theme-name", &gtkThemeName, NULL);
+-        g_object_get(settings, "gtk-application-prefer-dark-theme", &gtkApplicationPreferDarkTheme, NULL);
++        g_object_get(settings, "gtk-theme-name", &gtkThemeName, nullptr);
++        g_object_get(settings, "gtk-application-prefer-dark-theme", &gtkApplicationPreferDarkTheme, nullptr);
+         bool dark = Glib::ustring(gtkThemeName).find(":dark") != std::string::npos;
+         if (!dark) {
+             Glib::RefPtr<Gtk::StyleContext> stylecontext = window->get_style_context();
+diff --git a/src/widgets/gradient-vector.cpp b/src/widgets/gradient-vector.cpp
+index a2ca973738..2058522c47 100644
+--- a/src/widgets/gradient-vector.cpp
++++ b/src/widgets/gradient-vector.cpp
+@@ -809,12 +809,12 @@ static GtkWidget * sp_gradient_vector_widget_new(SPGradient *gradient, SPStop *s
+ 
+     GtkCellRenderer *renderer = gtk_cell_renderer_pixbuf_new ();
+     gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (combo_box), renderer, FALSE);
+-    gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (combo_box), renderer, "pixbuf", 0,  NULL);
++    gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (combo_box), renderer, "pixbuf", 0,  nullptr);
+     gtk_cell_renderer_set_padding(renderer, 5, 0);
+ 
+     renderer = gtk_cell_renderer_text_new ();
+     gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (combo_box), renderer, TRUE);
+-    gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (combo_box), renderer, "text", 1, NULL);
++    gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (combo_box), renderer, "text", 1, nullptr);
+     gtk_widget_show(combo_box);
+     gtk_box_pack_start(GTK_BOX(vb), combo_box, FALSE, FALSE, 0);
+     g_object_set_data(G_OBJECT(vb), "combo_box", combo_box);
+diff --git a/src/widgets/paint-selector.cpp b/src/widgets/paint-selector.cpp
+index 1e1f99ebfd..21e799c5b5 100644
+--- a/src/widgets/paint-selector.cpp
++++ b/src/widgets/paint-selector.cpp
+@@ -1012,7 +1012,7 @@ static void sp_paint_selector_set_mode_mesh(SPPaintSelector *psel, SPPaintSelect
+             GtkCellRenderer *renderer = gtk_cell_renderer_text_new ();
+             gtk_cell_renderer_set_padding (renderer, 2, 0);
+             gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (combo), renderer, TRUE);
+-            gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (combo), renderer, "text", COMBO_COL_LABEL, NULL);
++            gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (combo), renderer, "text", COMBO_COL_LABEL, nullptr);
+ 
+             ink_mesh_menu(combo);
+             g_signal_connect(G_OBJECT(combo), "changed", G_CALLBACK(sp_psel_mesh_change), psel);
+@@ -1085,7 +1085,7 @@ SPMeshGradient *SPPaintSelector::getMeshGradient()
+ 
+         gchar *mesh_name;
+         if (stockid) {
+-            mesh_name = g_strconcat("urn:inkscape:mesh:", meshid, NULL);
++            mesh_name = g_strconcat("urn:inkscape:mesh:", meshid, nullptr);
+         } else {
+             mesh_name = g_strdup(meshid);
+         }
+@@ -1208,7 +1208,7 @@ ink_pattern_menu_populate_menu(GtkWidget *combo, SPDocument *doc)
+ 
+     // find and load patterns.svg
+     if (patterns_doc == nullptr) {
+-        char *patterns_source = g_build_filename(INKSCAPE_PAINTDIR, "patterns.svg", NULL);
++        char *patterns_source = g_build_filename(INKSCAPE_PAINTDIR, "patterns.svg", nullptr);
+         if (Inkscape::IO::file_test(patterns_source, G_FILE_TEST_IS_REGULAR)) {
+             patterns_doc = SPDocument::createNewDoc(patterns_source, FALSE);
+         }
+@@ -1354,7 +1354,7 @@ static void sp_paint_selector_set_mode_pattern(SPPaintSelector *psel, SPPaintSel
+             GtkCellRenderer *renderer = gtk_cell_renderer_text_new ();
+             gtk_cell_renderer_set_padding (renderer, 2, 0);
+             gtk_cell_layout_pack_start (GTK_CELL_LAYOUT (combo), renderer, TRUE);
+-            gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (combo), renderer, "text", COMBO_COL_LABEL, NULL);
++            gtk_cell_layout_set_attributes (GTK_CELL_LAYOUT (combo), renderer, "text", COMBO_COL_LABEL, nullptr);
+ 
+             ink_pattern_menu(combo);
+             g_signal_connect(G_OBJECT(combo), "changed", G_CALLBACK(sp_psel_pattern_change), psel);
+@@ -1456,7 +1456,7 @@ SPPattern *SPPaintSelector::getPattern()
+         gchar *paturn;
+ 
+         if (stockid) {
+-            paturn = g_strconcat("urn:inkscape:pattern:", patid, NULL);
++            paturn = g_strconcat("urn:inkscape:pattern:", patid, nullptr);
+         } else {
+             paturn = g_strdup(patid);
+         }
+diff --git a/src/widgets/sp-xmlview-tree.cpp b/src/widgets/sp-xmlview-tree.cpp
+index 6f45e64c38..bfbe874fa2 100644
+--- a/src/widgets/sp-xmlview-tree.cpp
++++ b/src/widgets/sp-xmlview-tree.cpp
+@@ -163,7 +163,7 @@ GtkWidget *sp_xmlview_tree_new(Inkscape::XML::Node * repr, void * /*factory*/, v
+     gtk_tree_view_set_search_equal_func (GTK_TREE_VIEW(tree), search_equal_func, nullptr, nullptr);
+ 
+     GtkCellRenderer *renderer = gtk_cell_renderer_text_new ();
+-    GtkTreeViewColumn *column = gtk_tree_view_column_new_with_attributes ("", renderer, "text", STORE_TEXT_COL, NULL);
++    GtkTreeViewColumn *column = gtk_tree_view_column_new_with_attributes ("", renderer, "text", STORE_TEXT_COL, nullptr);
+     gtk_tree_view_append_column (GTK_TREE_VIEW (tree), column);
+     gtk_cell_renderer_set_padding (renderer, 2, 0);
+     gtk_tree_view_column_set_sizing (column, GTK_TREE_VIEW_COLUMN_AUTOSIZE);
+diff --git a/src/widgets/stroke-marker-selector.cpp b/src/widgets/stroke-marker-selector.cpp
+index 337ba16f1d..8cdbd1fc24 100644
+--- a/src/widgets/stroke-marker-selector.cpp
++++ b/src/widgets/stroke-marker-selector.cpp
+@@ -143,7 +143,7 @@ MarkerComboBox::init_combo()
+ 
+     // find and load markers.svg
+     if (markers_doc == nullptr) {
+-        char *markers_source = g_build_filename(INKSCAPE_MARKERSDIR, "markers.svg", NULL);
++        char *markers_source = g_build_filename(INKSCAPE_MARKERSDIR, "markers.svg", nullptr);
+         if (Inkscape::IO::file_test(markers_source, G_FILE_TEST_IS_REGULAR)) {
+             markers_doc = SPDocument::createNewDoc(markers_source, FALSE);
+         }
+@@ -196,7 +196,7 @@ const gchar * MarkerComboBox::get_active_marker_uri()
+         gchar *markurn;
+         if (stockid)
+         {
+-            markurn = g_strconcat("urn:inkscape:marker:",markid,NULL);
++            markurn = g_strconcat("urn:inkscape:marker:",markid,nullptr);
+         }
+         else
+         {
+@@ -206,7 +206,7 @@ const gchar * MarkerComboBox::get_active_marker_uri()
+         g_free(markurn);
+         if (mark) {
+             Inkscape::XML::Node *repr = mark->getRepr();
+-            marker = g_strconcat("url(#", repr->attribute("id"), ")", NULL);
++            marker = g_strconcat("url(#", repr->attribute("id"), ")", nullptr);
+         }
+     } else {
+         marker = g_strdup(markid);
+@@ -376,7 +376,7 @@ void MarkerComboBox::add_markers (std::vector<SPMarker *> const& marker_list, SP
+ void
+ MarkerComboBox::update_marker_image(gchar const *mname)
+ {
+-    gchar *cache_name = g_strconcat(combo_id, mname, NULL);
++    gchar *cache_name = g_strconcat(combo_id, mname, nullptr);
+     Glib::ustring key = svg_preview_cache.cache_key(doc->getDocumentURI(), cache_name, 24);
+     g_free (cache_name);
+     svg_preview_cache.remove_preview_from_cache(key);
+@@ -487,7 +487,7 @@ MarkerComboBox::create_marker_image(unsigned psize, gchar const *mname,
+     }
+ 
+     /* Update to renderable state */
+-    gchar *cache_name = g_strconcat(combo_id, mname, NULL);
++    gchar *cache_name = g_strconcat(combo_id, mname, nullptr);
+     Glib::ustring key = svg_preview_cache.cache_key(source->getDocumentURI(), cache_name, psize);
+     g_free (cache_name);
+     GdkPixbuf *pixbuf = svg_preview_cache.get_preview_from_cache(key); // no ref created
+diff --git a/src/widgets/stroke-style.cpp b/src/widgets/stroke-style.cpp
+index f2fe0e151a..b81de858cb 100644
+--- a/src/widgets/stroke-style.cpp
++++ b/src/widgets/stroke-style.cpp
+@@ -623,7 +623,7 @@ StrokeStyle::forkMarker(SPObject *marker, int loc, SPItem *item)
+     // Update the items url to new marker
+     Inkscape::XML::Node *mark_repr = marker->getRepr();
+     SPCSSAttr *css_item = sp_repr_css_attr_new();
+-    sp_repr_css_set_property(css_item, marker_id, g_strconcat("url(#", mark_repr->attribute("id"), ")", NULL));
++    sp_repr_css_set_property(css_item, marker_id, g_strconcat("url(#", mark_repr->attribute("id"), ")", nullptr));
+     sp_repr_css_change_recursive(item->getRepr(), css_item, "style");
+ 
+     sp_repr_css_attr_unref(css_item);
+diff --git a/src/xml/repr-io.cpp b/src/xml/repr-io.cpp
+index ac9794ecd1..e76870c4ab 100644
+--- a/src/xml/repr-io.cpp
++++ b/src/xml/repr-io.cpp
+@@ -442,7 +442,7 @@ void promote_to_namespace(Node *repr, const gchar *prefix) {
+     if ( repr->type() == Inkscape::XML::ELEMENT_NODE ) {
+         GQuark code = repr->code();
+         if (!qname_prefix(code).id()) {
+-            gchar *svg_name = g_strconcat(prefix, ":", g_quark_to_string(code), NULL);
++            gchar *svg_name = g_strconcat(prefix, ":", g_quark_to_string(code), nullptr);
+             repr->setCodeUnsafe(g_quark_from_string(svg_name));
+             g_free(svg_name);
+         }
+-- 
+2.31.1
+

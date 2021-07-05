@@ -102,6 +102,7 @@ S="${WORKDIR}"/${P}_2021-01-15_e86c870879
 
 PATCHES=(
 	"${FILESDIR}"/glib-2.67.3.patch
+	"${FILESDIR}/${P}-sentinels.patch"
 )
 
 pkg_pretend() {
